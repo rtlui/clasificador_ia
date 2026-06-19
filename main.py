@@ -241,11 +241,18 @@ def get_solicitud(id_solicitud: int, current_user: TokenData = Depends(get_curre
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT id_solicitud, id_usuario, tipo_solicitud, titulo, descripcion, fecha_creacion, estado, prioridad, fecha_resolucion "
-                    "FROM solicitudes WHERE id_solicitud = %s AND id_usuario = %s",
-                    (id_solicitud, current_user.id_usuario),
-                )
+                if current_user.es_admin:
+                    cur.execute(
+                        "SELECT id_solicitud, id_usuario, tipo_solicitud, titulo, descripcion, fecha_creacion, estado, prioridad, fecha_resolucion "
+                        "FROM solicitudes WHERE id_solicitud = %s",
+                        (id_solicitud,),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT id_solicitud, id_usuario, tipo_solicitud, titulo, descripcion, fecha_creacion, estado, prioridad, fecha_resolucion "
+                        "FROM solicitudes WHERE id_solicitud = %s AND id_usuario = %s",
+                        (id_solicitud, current_user.id_usuario),
+                    )
                 row = cur.fetchone()
                 if not row:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Solicitud no encontrada")
