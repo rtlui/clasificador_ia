@@ -11,7 +11,7 @@ DB_CONFIG = {
     "port": 5432,
     "dbname": "clasificador_ia",
     "user": "luis",
-    "password": "120803",
+    "password": "1208",
 }
 
 TIPOS_SOLICITUD = ["Peticion", "Queja", "Sugerencia", "Reclamo", "Denuncia"]
