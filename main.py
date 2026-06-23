@@ -4,9 +4,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 import psycopg2
-# pyrefly: ignore [missing-import]
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
-# pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
 from jose import JWTError, jwt
 from pydantic import BaseModel, EmailStr, Field

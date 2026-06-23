@@ -1,6 +1,5 @@
 import os
 import json
-# pyrefly: ignore [missing-import]
 import bcrypt
 import psycopg2
 from psycopg2 import sql
