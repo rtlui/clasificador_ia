@@ -99,6 +99,14 @@ class UsuarioUpdate(BaseModel):
     activo: bool
 
 
+class UsuarioSelfUpdate(BaseModel):
+    nombre_completo: Optional[str] = None
+    telefono: Optional[str] = None
+    correo: Optional[EmailStr] = None
+    cedula: Optional[str] = None
+    contrasena: Optional[str] = Field(None, min_length=8)
+
+
 class TokenData(BaseModel):
     id_usuario: int
     es_admin: bool
@@ -410,3 +418,94 @@ def admin_update_usuario(
                 return UsuarioSummary(**dict(zip([desc[0] for desc in cur.description], row)))
     finally:
         conn.close()
+
+
+@app.get("/usuario/perfil", response_model=UsuarioSummary)
+def get_usuario_perfil(current_user: TokenData = Depends(get_current_user)):
+    conn = obtener_conexion()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id_usuario, correo, cedula, nombre_completo, telefono, es_admin, activo "
+                    "FROM usuarios WHERE id_usuario = %s",
+                    (current_user.id_usuario,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+                return UsuarioSummary(**dict(zip([desc[0] for desc in cur.description], row)))
+    finally:
+        conn.close()
+
+
+@app.put("/usuario/perfil", response_model=UsuarioSummary)
+def update_usuario_perfil(payload: UsuarioSelfUpdate, current_user: TokenData = Depends(get_current_user)):
+    conn = obtener_conexion()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                updates = []
+                params = []
+
+                if payload.nombre_completo is not None:
+                    updates.append("nombre_completo = %s")
+                    params.append(payload.nombre_completo)
+
+                if payload.telefono is not None:
+                    updates.append("telefono = %s")
+                    params.append(payload.telefono)
+
+                if payload.correo is not None:
+                    updates.append("correo = %s")
+                    params.append(payload.correo)
+
+                if payload.cedula is not None:
+                    cedula_clean = "".join(payload.cedula.split()).replace("-", "")
+                    if len(cedula_clean) > 11:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="La cédula no puede superar los 11 caracteres sin guiones ni espacios."
+                        )
+                    updates.append("cedula = %s")
+                    params.append(cedula_clean)
+
+                if payload.contrasena is not None:
+                    if len(payload.contrasena) < 8:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="La contraseña debe tener al menos 8 caracteres."
+                        )
+                    hashed = hash_password(payload.contrasena)
+                    updates.append("contrasena = %s")
+                    params.append(hashed)
+
+                if updates:
+                    query = (
+                        f"UPDATE usuarios SET {', '.join(updates)} WHERE id_usuario = %s "
+                        "RETURNING id_usuario, correo, cedula, nombre_completo, telefono, es_admin, activo"
+                    )
+                    params.append(current_user.id_usuario)
+                    try:
+                        cur.execute(query, params)
+                        row = cur.fetchone()
+                    except psycopg2.IntegrityError:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="El correo o la cédula ya están registrados por otro usuario."
+                        )
+                else:
+                    cur.execute(
+                        "SELECT id_usuario, correo, cedula, nombre_completo, telefono, es_admin, activo "
+                        "FROM usuarios WHERE id_usuario = %s",
+                        (current_user.id_usuario,),
+                    )
+                    row = cur.fetchone()
+
+                if not row:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+                return UsuarioSummary(**dict(zip([desc[0] for desc in cur.description], row)))
+    finally:
+        conn.close()
+
+
