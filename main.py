@@ -7,7 +7,7 @@ import psycopg2
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from jose import JWTError, jwt
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from core import (
     TIPOS_SOLICITUD,
@@ -41,6 +41,23 @@ class UserRegister(BaseModel):
     cedula: Optional[str] = None
     telefono: Optional[str] = None
 
+    @field_validator("cedula")
+    @classmethod
+    def clean_cedula(cls, v):
+        if v is not None:
+            v = v.replace("-", "").strip()
+            if len(v) > 11:
+                raise ValueError("Cédula inválida")
+        return v
+
+    @field_validator("telefono")
+    @classmethod
+    def clean_telefono(cls, v):
+        if v is not None:
+            v = v.replace("-", "").strip()
+            if len(v) > 20:
+                raise ValueError("Teléfono inválido")
+        return v
 
 class UserLogin(BaseModel):
     correo: EmailStr
