@@ -235,7 +235,7 @@ def register_user(user: UserRegister):
     guardar_token_verificacion(usuario_res.id_usuario, token)
 
     # Send email
-    verification_link = f"https://clasificadoria.ddns.net/verify?token={token}"
+    verification_link = f"https://gov-tech-sm75.vercel.app/verify?token={token}"
     try:
         html_body = f"<p>Hola {user.nombre_completo},</p><p>Por favor verifica tu correo haciendo clic en el siguiente enlace:</p><p><a href='{verification_link}'>Verificar correo</a></p>"
         send_email(user.correo, "Verifica tu correo electrónico", html_body)
@@ -296,7 +296,7 @@ def forgot_password(payload: ForgotPasswordRequest):
     expira = datetime.utcnow() + timedelta(hours=1)
     guardar_token_reset(id_usuario, token, expira)
 
-    reset_link = f"https://clasificadoria.ddns.net/reset-password?token={token}"
+    reset_link = f"https://gov-tech-sm75.vercel.app/reset-password?token={token}"
     try:
         html_body = f"<p>Hola {nombre_completo},</p><p>Has solicitado restablecer tu contraseña. Haz clic en el siguiente enlace (válido por 1 hora):</p><p><a href='{reset_link}'>Restablecer contraseña</a></p>"
         send_email(payload.email, "Restablecer contraseña", html_body)
