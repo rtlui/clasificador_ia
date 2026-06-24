@@ -2,6 +2,7 @@ import os
 import json
 import bcrypt
 import psycopg2
+from datetime import datetime
 from psycopg2 import sql
 from google import genai
 from google.genai import types
@@ -142,3 +143,74 @@ def verify_password(password: str, hashed: str) -> bool:
         return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
     except Exception:
         return False
+
+
+def guardar_token_verificacion(id_usuario, token):
+    conn = obtener_conexion()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE usuarios SET token_verificacion = %s WHERE id_usuario = %s",
+                    (token, id_usuario)
+                )
+    finally:
+        conn.close()
+
+
+def verificar_token_email(token):
+    conn = obtener_conexion()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE usuarios SET verificado = TRUE, token_verificacion = NULL "
+                    "WHERE token_verificacion = %s RETURNING id_usuario",
+                    (token,)
+                )
+                row = cur.fetchone()
+                return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def guardar_token_reset(id_usuario, token, expira):
+    conn = obtener_conexion()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE usuarios SET token_reset = %s, token_reset_expira = %s WHERE id_usuario = %s",
+                    (token, expira, id_usuario)
+                )
+    finally:
+        conn.close()
+
+
+def validar_token_reset(token):
+    conn = obtener_conexion()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id_usuario FROM usuarios WHERE token_reset = %s AND token_reset_expira > %s",
+                    (token, datetime.utcnow())
+                )
+                row = cur.fetchone()
+                return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def actualizar_password(id_usuario, nuevo_hash):
+    conn = obtener_conexion()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE usuarios SET contrasena = %s, token_reset = NULL, token_reset_expira = NULL WHERE id_usuario = %s",
+                    (nuevo_hash, id_usuario)
+                )
+    finally:
+        conn.close()
+

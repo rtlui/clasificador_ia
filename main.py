@@ -1,5 +1,7 @@
 import os
 import base64
+import secrets
+import resend
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -18,11 +20,17 @@ from core import (
     clasificar,
     hash_password,
     verify_password,
+    guardar_token_verificacion,
+    verificar_token_email,
+    guardar_token_reset,
+    validar_token_reset,
+    actualizar_password,
 )
 
 SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "ginganguliguliguliwachagingangugingangu")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+resend.api_key = os.environ.get("RESEND_API_KEY")
 
 app = FastAPI(title="Clasificador IA")
 app.add_middleware(
@@ -62,6 +70,15 @@ class UserRegister(BaseModel):
 class UserLogin(BaseModel):
     correo: EmailStr
     contrasena: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    nueva_password: str = Field(min_length=8)
 
 
 class TokenResponse(BaseModel):
@@ -185,9 +202,27 @@ def register_user(user: UserRegister):
                     (user.correo, user.cedula, user.nombre_completo, user.telefono, hashed_password, False, True),
                 )
                 row = cur.fetchone()
-                return UsuarioSummary(**dict(zip([desc[0] for desc in cur.description], row)))
+                usuario_res = UsuarioSummary(**dict(zip([desc[0] for desc in cur.description], row)))
     finally:
         conn.close()
+
+    # Generate token and save
+    token = secrets.token_urlsafe(32)
+    guardar_token_verificacion(usuario_res.id_usuario, token)
+
+    # Send email
+    verification_link = f"https://clasificadoria.ddns.net/verify?token={token}"
+    try:
+        resend.Emails.send({
+            "from": "onboarding@resend.dev",
+            "to": user.correo,
+            "subject": "Verifica tu correo electrónico",
+            "html": f"<p>Hola {user.nombre_completo},</p><p>Por favor verifica tu correo haciendo clic en el siguiente enlace:</p><p><a href='{verification_link}'>Verificar correo</a></p>"
+        })
+    except Exception as e:
+        print(f"Error enviando correo de verificación: {e}")
+
+    return usuario_res
 
 
 @app.post("/auth/login", response_model=TokenResponse)
@@ -196,13 +231,15 @@ def login_user(user: UserLogin):
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT id_usuario, contrasena, es_admin, activo FROM usuarios WHERE correo = %s", (user.correo,))
+                cur.execute("SELECT id_usuario, contrasena, es_admin, activo, verificado FROM usuarios WHERE correo = %s", (user.correo,))
                 row = cur.fetchone()
                 if not row:
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Correo o contraseña incorrectos")
-                id_usuario, hashed, es_admin, activo = row
+                id_usuario, hashed, es_admin, activo, verificado = row
                 if not activo:
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario inactivo")
+                if not verificado:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Debes verificar tu correo antes de iniciar sesión.")
                 if not verify_password(user.contrasena, hashed):
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Correo o contraseña incorrectos")
 
@@ -210,6 +247,59 @@ def login_user(user: UserLogin):
                 return TokenResponse(access_token=token)
     finally:
         conn.close()
+
+
+@app.get("/verify")
+def verify_email(token: str):
+    id_usuario = verificar_token_email(token)
+    if not id_usuario:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token inválido o expirado")
+    return {"message": "Correo verificado exitosamente"}
+
+
+@app.post("/forgot-password")
+def forgot_password(payload: ForgotPasswordRequest):
+    conn = obtener_conexion()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id_usuario, nombre_completo FROM usuarios WHERE correo = %s", (payload.email,))
+                row = cur.fetchone()
+                if not row:
+                    # Return success even if not found to prevent email enumeration
+                    return {"message": "Si el correo está registrado, recibirás un enlace para restablecer tu contraseña."}
+                id_usuario, nombre_completo = row
+    finally:
+        conn.close()
+
+    token = secrets.token_urlsafe(32)
+    expira = datetime.utcnow() + timedelta(hours=1)
+    guardar_token_reset(id_usuario, token, expira)
+
+    reset_link = f"https://clasificadoria.ddns.net/reset-password?token={token}"
+    try:
+        resend.Emails.send({
+            "from": "onboarding@resend.dev",
+            "to": payload.email,
+            "subject": "Restablecer contraseña",
+            "html": f"<p>Hola {nombre_completo},</p><p>Has solicitado restablecer tu contraseña. Haz clic en el siguiente enlace (válido por 1 hora):</p><p><a href='{reset_link}'>Restablecer contraseña</a></p>"
+        })
+    except Exception as e:
+        print(f"Error enviando correo de restablecimiento: {e}")
+
+    return {"message": "Si el correo está registrado, recibirás un enlace para restablecer tu contraseña."}
+
+
+@app.post("/reset-password")
+def reset_password(payload: ResetPasswordRequest):
+    id_usuario = validar_token_reset(payload.token)
+    if not id_usuario:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token inválido o expirado")
+    
+    nuevo_hash = hash_password(payload.nueva_password)
+    actualizar_password(id_usuario, nuevo_hash)
+    
+    return {"message": "Contraseña actualizada exitosamente"}
 
 
 @app.post("/solicitudes", response_model=SolicitudSummary)
