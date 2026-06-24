@@ -305,6 +305,13 @@ def forgot_password(payload: ForgotPasswordRequest):
 
     return {"message": "Si el correo está registrado, recibirás un enlace para restablecer tu contraseña."}
 
+@app.get("/reset-password")
+def validate_reset_token(token: str):
+    id_usuario = validar_token_reset(token)
+    if not id_usuario:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token inválido o expirado")
+    return {"message": "Token válido"}
+
 
 @app.post("/reset-password")
 def reset_password(payload: ResetPasswordRequest):
