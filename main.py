@@ -1,7 +1,9 @@
 import os
 import base64
 import secrets
-import resend
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -30,7 +32,29 @@ from core import (
 SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "ginganguliguliguliwachagingangugingangu")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
-resend.api_key = os.environ.get("RESEND_API_KEY")
+
+def send_email(to_email: str, subject: str, html_content: str):
+    smtp_server = "smtp.gmail.com"
+    smtp_port = 587
+    sender_email = os.environ.get("EMAIL_USER")
+    sender_password = os.environ.get("EMAIL_PASSWORD")
+
+    if not sender_email or not sender_password:
+        print("Error: EMAIL_USER o EMAIL_PASSWORD no están configurados.")
+        return
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = sender_email
+    msg["To"] = to_email
+
+    part = MIMEText(html_content, "html")
+    msg.attach(part)
+
+    with smtplib.SMTP(smtp_server, smtp_port) as server:
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, to_email, msg.as_string())
 
 app = FastAPI(title="Clasificador IA")
 app.add_middleware(
@@ -213,12 +237,8 @@ def register_user(user: UserRegister):
     # Send email
     verification_link = f"https://clasificadoria.ddns.net/verify?token={token}"
     try:
-        resend.Emails.send({
-            "from": "onboarding@resend.dev",
-            "to": user.correo,
-            "subject": "Verifica tu correo electrónico",
-            "html": f"<p>Hola {user.nombre_completo},</p><p>Por favor verifica tu correo haciendo clic en el siguiente enlace:</p><p><a href='{verification_link}'>Verificar correo</a></p>"
-        })
+        html_body = f"<p>Hola {user.nombre_completo},</p><p>Por favor verifica tu correo haciendo clic en el siguiente enlace:</p><p><a href='{verification_link}'>Verificar correo</a></p>"
+        send_email(user.correo, "Verifica tu correo electrónico", html_body)
     except Exception as e:
         print(f"Error enviando correo de verificación: {e}")
 
@@ -278,12 +298,8 @@ def forgot_password(payload: ForgotPasswordRequest):
 
     reset_link = f"https://clasificadoria.ddns.net/reset-password?token={token}"
     try:
-        resend.Emails.send({
-            "from": "onboarding@resend.dev",
-            "to": payload.email,
-            "subject": "Restablecer contraseña",
-            "html": f"<p>Hola {nombre_completo},</p><p>Has solicitado restablecer tu contraseña. Haz clic en el siguiente enlace (válido por 1 hora):</p><p><a href='{reset_link}'>Restablecer contraseña</a></p>"
-        })
+        html_body = f"<p>Hola {nombre_completo},</p><p>Has solicitado restablecer tu contraseña. Haz clic en el siguiente enlace (válido por 1 hora):</p><p><a href='{reset_link}'>Restablecer contraseña</a></p>"
+        send_email(payload.email, "Restablecer contraseña", html_body)
     except Exception as e:
         print(f"Error enviando correo de restablecimiento: {e}")
 
