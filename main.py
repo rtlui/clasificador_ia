@@ -589,6 +589,7 @@ def update_usuario_perfil(payload: UsuarioSelfUpdate, current_user: TokenData = 
                 if payload.correo is not None:
                     updates.append("correo = %s")
                     params.append(payload.correo)
+                    updates.append("verificado = FALSE")
 
                 if payload.cedula is not None:
                     cedula_clean = "".join(payload.cedula.split()).replace("-", "")
@@ -634,8 +635,19 @@ def update_usuario_perfil(payload: UsuarioSelfUpdate, current_user: TokenData = 
 
                 if not row:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
-                return UsuarioSummary(**dict(zip([desc[0] for desc in cur.description], row)))
+                usuario_res = UsuarioSummary(**dict(zip([desc[0] for desc in cur.description], row)))
     finally:
         conn.close()
 
+    if payload.correo is not None:
+        token = secrets.token_urlsafe(32)
+        guardar_token_verificacion(current_user.id_usuario, token)
+        
+        verification_link = f"https://gov-tech-sm75.vercel.app/verify?token={token}"
+        try:
+            html_body = f"<p>Hola {usuario_res.nombre_completo},</p><p>Por favor verifica tu correo haciendo clic en el siguiente enlace:</p><p><a href='{verification_link}'>Verificar correo</a></p>"
+            send_email(payload.correo, "Verifica tu correo electrónico", html_body)
+        except Exception as e:
+            print(f"Error enviando correo de verificación: {e}")
 
+    return usuario_res
