@@ -29,7 +29,9 @@ from core import (
     actualizar_password,
 )
 
-SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "ginganguliguliguliwachagingangugingangu")
+SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("Necesitas configurar JWT_SECRET_KEY como variable de entorno.")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 

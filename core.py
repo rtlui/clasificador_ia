@@ -8,11 +8,11 @@ from google import genai
 from google.genai import types
 
 DB_CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "dbname": "clasificador_ia",
-    "user": "luis",
-    "password": "1208",
+    "host": os.environ.get("DB_HOST", "localhost"),
+    "port": int(os.environ.get("DB_PORT", "5432")),
+    "dbname": os.environ.get("DB_NAME", "clasificador_ia"),
+    "user": os.environ.get("DB_USER", "luis"),
+    "password": os.environ.get("DB_PASSWORD", "1208"),
 }
 
 TIPOS_SOLICITUD = ["Peticion", "Queja", "Sugerencia", "Reclamo", "Denuncia"]
