@@ -1,3 +1,6 @@
 __pycache__/
 *.py[cod]
 start.sh
+seed_accounts.sql
+accounts.json
+generate_seed.py
