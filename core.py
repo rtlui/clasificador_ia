@@ -11,8 +11,8 @@ DB_CONFIG = {
     "host": os.environ.get("DB_HOST", "localhost"),
     "port": int(os.environ.get("DB_PORT", "5432")),
     "dbname": os.environ.get("DB_NAME", "clasificador_ia"),
-    "user": os.environ.get("DB_USER", "luis"),
-    "password": os.environ.get("DB_PASSWORD", "1208"),
+    "user": os.environ.get("DB_USER", "postgres"),
+    "password": os.environ.get("DB_PASSWORD", "postgres"),
 }
 
 TIPOS_SOLICITUD = ["Peticion", "Queja", "Sugerencia", "Reclamo", "Denuncia"]
