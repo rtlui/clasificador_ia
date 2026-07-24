@@ -2,6 +2,8 @@ import os
 import base64
 import secrets
 import smtplib
+import logging
+from logging.handlers import RotatingFileHandler
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
@@ -59,6 +61,59 @@ def send_email(to_email: str, subject: str, html_content: str):
         server.sendmail(sender_email, to_email, msg.as_string())
 
 app = FastAPI(title="Clasificador IA")
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("clasificador_ia")
+logger.setLevel(logging.INFO)
+
+# Formatter
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# Console Handler
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+# File Handler
+log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.log")
+file_handler = RotatingFileHandler(log_file_path, maxBytes=10000000, backupCount=5, encoding="utf-8")
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+logger.propagate = False
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    user_str = "Anonymous"
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        try:
+            token = auth_header.split(" ", 1)[1].strip()
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            id_usuario = payload.get("id_usuario")
+            es_admin = payload.get("es_admin")
+            if id_usuario is not None:
+                user_str = f"User ID: {id_usuario} (Admin: {es_admin})"
+        except Exception:
+            user_str = "Invalid Token"
+
+    method = request.method
+    path = request.url.path
+    client_ip = request.client.host if request.client else "Unknown"
+
+    logger.info(f"Incoming request: {method} {path} | Client IP: {client_ip} | Caller: {user_str}")
+
+    start_time = datetime.utcnow()
+    try:
+        response = await call_next(request)
+        process_time = (datetime.utcnow() - start_time).total_seconds()
+        logger.info(f"Response: {method} {path} | Status: {response.status_code} | Caller: {user_str} | Duration: {process_time:.3f}s")
+        return response
+    except Exception as e:
+        process_time = (datetime.utcnow() - start_time).total_seconds()
+        logger.error(f"Error processing request: {method} {path} | Error: {str(e)} | Caller: {user_str} | Duration: {process_time:.3f}s")
+        raise e
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -219,6 +274,7 @@ def register_user(user: UserRegister):
                     (user.correo, user.cedula),
                 )
                 if cur.fetchone():
+                    logger.warning(f"Registration failed: Email {user.correo} or Cedula {user.cedula} already exists.")
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Correo o cédula ya registrados")
 
                 hashed_password = hash_password(user.contrasena)
@@ -236,13 +292,19 @@ def register_user(user: UserRegister):
     token = secrets.token_urlsafe(32)
     guardar_token_verificacion(usuario_res.id_usuario, token)
 
+    logger.info(
+        f"Change made: New user registered | Caller: Anonymous | User ID: {usuario_res.id_usuario} | "
+        f"Details: {{ correo: '{usuario_res.correo}', nombre_completo: '{usuario_res.nombre_completo}', "
+        f"cedula: '{usuario_res.cedula}', telefono: '{usuario_res.telefono}', es_admin: {usuario_res.es_admin}, activo: {usuario_res.activo} }}"
+    )
+
     # Send email
     verification_link = f"https://gov-tech-sm75.vercel.app/verify?token={token}"
     try:
         html_body = f"<p>Hola {user.nombre_completo},</p><p>Por favor verifica tu correo haciendo clic en el siguiente enlace:</p><p><a href='{verification_link}'>Verificar correo</a></p>"
         send_email(user.correo, "Verifica tu correo electrónico", html_body)
     except Exception as e:
-        print(f"Error enviando correo de verificación: {e}")
+        logger.error(f"Error sending verification email to {user.correo}: {e}")
 
     return usuario_res
 
@@ -256,16 +318,21 @@ def login_user(user: UserLogin):
                 cur.execute("SELECT id_usuario, contrasena, es_admin, activo, verificado FROM usuarios WHERE correo = %s", (user.correo,))
                 row = cur.fetchone()
                 if not row:
+                    logger.warning(f"Login failed: Incorrect email or password for {user.correo}")
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Correo o contraseña incorrectos")
                 id_usuario, hashed, es_admin, activo, verificado = row
                 if not activo:
+                    logger.warning(f"Login failed: User account inactive for {user.correo}")
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario inactivo")
                 if not verificado:
+                    logger.warning(f"Login failed: Email not verified for {user.correo}")
                     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Debes verificar tu correo antes de iniciar sesión.")
                 if not verify_password(user.contrasena, hashed):
+                    logger.warning(f"Login failed: Incorrect email or password for {user.correo}")
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Correo o contraseña incorrectos")
 
                 token = create_access_token({"id_usuario": id_usuario, "es_admin": es_admin})
+                logger.info(f"Login successful for user: {user.correo} (User ID: {id_usuario})")
                 return TokenResponse(access_token=token)
     finally:
         conn.close()
@@ -275,7 +342,9 @@ def login_user(user: UserLogin):
 def verify_email(token: str):
     id_usuario = verificar_token_email(token)
     if not id_usuario:
+        logger.warning("Email verification failed: Invalid or expired token")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token inválido o expirado")
+    logger.info(f"Change made: User verified | Caller: User ID {id_usuario} (via token) | Details: verificado = True")
     return {"message": "Correo verificado exitosamente"}
 
 
@@ -288,6 +357,7 @@ def forgot_password(payload: ForgotPasswordRequest):
                 cur.execute("SELECT id_usuario, nombre_completo FROM usuarios WHERE correo = %s", (payload.email,))
                 row = cur.fetchone()
                 if not row:
+                    logger.info(f"Forgot password requested for email: {payload.email} (Not found in DB)")
                     # Return success even if not found to prevent email enumeration
                     return {"message": "Si el correo está registrado, recibirás un enlace para restablecer tu contraseña."}
                 id_usuario, nombre_completo = row
@@ -297,13 +367,14 @@ def forgot_password(payload: ForgotPasswordRequest):
     token = secrets.token_urlsafe(32)
     expira = datetime.utcnow() + timedelta(hours=1)
     guardar_token_reset(id_usuario, token, expira)
+    logger.info(f"Change made: Generated password reset token | Caller: Anonymous | User ID: {id_usuario} | Details: Reset token generated, expires at {expira}")
 
     reset_link = f"https://gov-tech-sm75.vercel.app/reset-password?token={token}"
     try:
         html_body = f"<p>Hola {nombre_completo},</p><p>Has solicitado restablecer tu contraseña. Haz clic en el siguiente enlace (válido por 1 hora):</p><p><a href='{reset_link}'>Restablecer contraseña</a></p>"
         send_email(payload.email, "Restablecer contraseña", html_body)
     except Exception as e:
-        print(f"Error enviando correo de restablecimiento: {e}")
+        logger.error(f"Error sending password reset email to {payload.email}: {e}")
 
     return {"message": "Si el correo está registrado, recibirás un enlace para restablecer tu contraseña."}
 
@@ -319,10 +390,12 @@ def validate_reset_token(token: str):
 def reset_password(payload: ResetPasswordRequest):
     id_usuario = validar_token_reset(payload.token)
     if not id_usuario:
+        logger.warning("Password reset failed: Invalid or expired token")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token inválido o expirado")
     
     nuevo_hash = hash_password(payload.nueva_password)
     actualizar_password(id_usuario, nuevo_hash)
+    logger.info(f"Change made: Password reset successful | Caller: User ID {id_usuario} (via token) | Details: Password updated successfully")
     
     return {"message": "Contraseña actualizada exitosamente"}
 
@@ -335,6 +408,7 @@ def create_solicitud(solicitud: SolicitudCreate, current_user: TokenData = Depen
             try:
                 contenido = base64.b64decode(item.archivo_base64)
             except Exception as exc:
+                logger.warning(f"Solicitud creation failed: Invalid attachment {item.nombre_archivo} for user {current_user.id_usuario}")
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Anexo inválido {item.nombre_archivo}") from exc
             anexos.append((contenido, item.nombre_archivo))
 
@@ -346,6 +420,12 @@ def create_solicitud(solicitud: SolicitudCreate, current_user: TokenData = Depen
         prioridad,
         anexos_lista=anexos,
         id_usuario=current_user.id_usuario,
+    )
+
+    logger.info(
+        f"Change made: Created solicitud | Caller: User ID {current_user.id_usuario} (Admin: {current_user.es_admin}) | "
+        f"Details: {{ id_solicitud: {id_solicitud}, tipo_solicitud: '{tipo_solicitud}', titulo: '{solicitud.titulo}', "
+        f"prioridad: '{prioridad}', anexos_count: {len(anexos)} }}"
     )
 
     return SolicitudSummary(
@@ -452,11 +532,19 @@ def admin_update_estado(
     current_user: TokenData = Depends(get_current_admin),
 ):
     if payload.estado not in ESTADOS:
+        logger.warning(f"Admin action failed: Invalid state '{payload.estado}' by Caller ID {current_user.id_usuario}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Estado inválido")
     conn = obtener_conexion()
     try:
         with conn:
             with conn.cursor() as cur:
+                # Fetch old status
+                cur.execute("SELECT estado FROM solicitudes WHERE id_solicitud = %s", (id_solicitud,))
+                row_old = cur.fetchone()
+                if not row_old:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Solicitud no encontrada")
+                estado_anterior = row_old[0]
+
                 fecha_resolucion = datetime.utcnow() if payload.estado == "Resuelta" else None
                 cur.execute(
                     "UPDATE solicitudes SET estado = %s, fecha_resolucion = %s WHERE id_solicitud = %s RETURNING "
@@ -464,8 +552,12 @@ def admin_update_estado(
                     (payload.estado, fecha_resolucion, id_solicitud),
                 )
                 row = cur.fetchone()
-                if not row:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Solicitud no encontrada")
+                
+                logger.info(
+                    f"Change made: Updated solicitud state | Caller: User ID {current_user.id_usuario} (Admin: {current_user.es_admin}) | "
+                    f"Details: {{ id_solicitud: {id_solicitud}, old_estado: '{estado_anterior}', new_estado: '{payload.estado}' }}"
+                )
+                
                 return SolicitudDetail(**dict(zip([desc[0] for desc in cur.description], row)))
     finally:
         conn.close()
@@ -481,19 +573,31 @@ def admin_update_prioridad(
     current_user: TokenData = Depends(get_current_admin),
 ):
     if payload.prioridad not in PRIORIDADES:
+        logger.warning(f"Admin action failed: Invalid priority '{payload.prioridad}' by Caller ID {current_user.id_usuario}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Prioridad inválida")
     conn = obtener_conexion()
     try:
         with conn:
             with conn.cursor() as cur:
+                # Fetch old priority
+                cur.execute("SELECT prioridad FROM solicitudes WHERE id_solicitud = %s", (id_solicitud,))
+                row_old = cur.fetchone()
+                if not row_old:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Solicitud no encontrada")
+                prioridad_anterior = row_old[0]
+
                 cur.execute(
                     "UPDATE solicitudes SET prioridad = %s WHERE id_solicitud = %s RETURNING "
                     "id_solicitud, id_usuario, tipo_solicitud, titulo, descripcion, fecha_creacion, estado, prioridad, fecha_resolucion",
                     (payload.prioridad, id_solicitud),
                 )
                 row = cur.fetchone()
-                if not row:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Solicitud no encontrada")
+                
+                logger.info(
+                    f"Change made: Updated solicitud priority | Caller: User ID {current_user.id_usuario} (Admin: {current_user.es_admin}) | "
+                    f"Details: {{ id_solicitud: {id_solicitud}, old_prioridad: '{prioridad_anterior}', new_prioridad: '{payload.prioridad}' }}"
+                )
+                
                 return SolicitudDetail(**dict(zip([desc[0] for desc in cur.description], row)))
     finally:
         conn.close()
@@ -510,19 +614,31 @@ def admin_update_categoria(
     current_user: TokenData = Depends(get_current_admin),
 ):
     if payload.tipo_solicitud not in TIPOS_SOLICITUD:
+        logger.warning(f"Admin action failed: Invalid category '{payload.tipo_solicitud}' by Caller ID {current_user.id_usuario}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de solicitud inválido")
     conn = obtener_conexion()
     try:
         with conn:
             with conn.cursor() as cur:
+                # Fetch old category
+                cur.execute("SELECT tipo_solicitud FROM solicitudes WHERE id_solicitud = %s", (id_solicitud,))
+                row_old = cur.fetchone()
+                if not row_old:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Solicitud no encontrada")
+                tipo_anterior = row_old[0]
+
                 cur.execute(
                     "UPDATE solicitudes SET tipo_solicitud = %s WHERE id_solicitud = %s RETURNING "
                     "id_solicitud, id_usuario, tipo_solicitud, titulo, descripcion, fecha_creacion, estado, prioridad, fecha_resolucion",
                     (payload.tipo_solicitud, id_solicitud),
                 )
                 row = cur.fetchone()
-                if not row:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Solicitud no encontrada")
+                
+                logger.info(
+                    f"Change made: Updated solicitud category | Caller: User ID {current_user.id_usuario} (Admin: {current_user.es_admin}) | "
+                    f"Details: {{ id_solicitud: {id_solicitud}, old_categoria: '{tipo_anterior}', new_categoria: '{payload.tipo_solicitud}' }}"
+                )
+                
                 return SolicitudDetail(**dict(zip([desc[0] for desc in cur.description], row)))
     finally:
         conn.close()
@@ -595,14 +711,27 @@ def admin_update_usuario(
     try:
         with conn:
             with conn.cursor() as cur:
+                # Fetch old status
+                cur.execute("SELECT activo, es_admin, correo FROM usuarios WHERE id_usuario = %s", (id_usuario,))
+                row_old = cur.fetchone()
+                if not row_old:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+                activo_anterior, es_admin_anterior, correo_usuario = row_old
+
                 cur.execute(
                     "UPDATE usuarios SET activo = %s, es_admin = %s WHERE id_usuario = %s RETURNING "
                     "id_usuario, correo, cedula, nombre_completo, telefono, es_admin, activo",
                     (payload.activo, payload.es_admin, id_usuario),
                 )
                 row = cur.fetchone()
-                if not row:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+                
+                logger.info(
+                    f"Change made: Admin updated user status/role | Caller: User ID {current_user.id_usuario} (Admin: {current_user.es_admin}) | "
+                    f"Details: {{ target_user_id: {id_usuario}, target_correo: '{correo_usuario}', "
+                    f"old_activo: {activo_anterior}, new_activo: {payload.activo}, "
+                    f"old_es_admin: {es_admin_anterior}, new_es_admin: {payload.es_admin} }}"
+                )
+                
                 return UsuarioSummary(**dict(zip([desc[0] for desc in cur.description], row)))
     finally:
         conn.close()
@@ -633,21 +762,39 @@ def update_usuario_perfil(payload: UsuarioSelfUpdate, current_user: TokenData = 
     try:
         with conn:
             with conn.cursor() as cur:
+                # Fetch current user data before updates
+                cur.execute(
+                    "SELECT correo, cedula, nombre_completo, telefono FROM usuarios WHERE id_usuario = %s",
+                    (current_user.id_usuario,)
+                )
+                row_old = cur.fetchone()
+                if not row_old:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+                correo_old, cedula_old, nombre_completo_old, telefono_old = row_old
+
                 updates = []
                 params = []
+                cambios_log = {}
 
                 if payload.nombre_completo is not None:
                     updates.append("nombre_completo = %s")
                     params.append(payload.nombre_completo)
+                    if payload.nombre_completo != nombre_completo_old:
+                        cambios_log["nombre_completo"] = {"old": nombre_completo_old, "new": payload.nombre_completo}
 
                 if payload.telefono is not None:
                     updates.append("telefono = %s")
                     params.append(payload.telefono)
+                    if payload.telefono != telefono_old:
+                        cambios_log["telefono"] = {"old": telefono_old, "new": payload.telefono}
 
                 if payload.correo is not None:
                     updates.append("correo = %s")
                     params.append(payload.correo)
                     updates.append("verificado = FALSE")
+                    if payload.correo != correo_old:
+                        cambios_log["correo"] = {"old": correo_old, "new": payload.correo}
+                        cambios_log["verificado"] = {"old": True, "new": False}
 
                 if payload.cedula is not None:
                     cedula_clean = "".join(payload.cedula.split()).replace("-", "")
@@ -658,6 +805,8 @@ def update_usuario_perfil(payload: UsuarioSelfUpdate, current_user: TokenData = 
                         )
                     updates.append("cedula = %s")
                     params.append(cedula_clean)
+                    if cedula_clean != cedula_old:
+                        cambios_log["cedula"] = {"old": cedula_old, "new": cedula_clean}
 
                 if payload.contrasena is not None:
                     if len(payload.contrasena) < 8:
@@ -668,6 +817,7 @@ def update_usuario_perfil(payload: UsuarioSelfUpdate, current_user: TokenData = 
                     hashed = hash_password(payload.contrasena)
                     updates.append("contrasena = %s")
                     params.append(hashed)
+                    cambios_log["contrasena"] = {"old": "[PROTECTED]", "new": "[PROTECTED]"}
 
                 if updates:
                     query = (
@@ -697,6 +847,12 @@ def update_usuario_perfil(payload: UsuarioSelfUpdate, current_user: TokenData = 
     finally:
         conn.close()
 
+    if cambios_log:
+        logger.info(
+            f"Change made: User profile updated | Caller: User ID {current_user.id_usuario} (Admin: {current_user.es_admin}) | "
+            f"Details: {cambios_log}"
+        )
+
     if payload.correo is not None:
         token = secrets.token_urlsafe(32)
         guardar_token_verificacion(current_user.id_usuario, token)
@@ -706,6 +862,6 @@ def update_usuario_perfil(payload: UsuarioSelfUpdate, current_user: TokenData = 
             html_body = f"<p>Hola {usuario_res.nombre_completo},</p><p>Por favor verifica tu correo haciendo clic en el siguiente enlace:</p><p><a href='{verification_link}'>Verificar correo</a></p>"
             send_email(payload.correo, "Verifica tu correo electrónico", html_body)
         except Exception as e:
-            print(f"Error enviando correo de verificación: {e}")
+            logger.error(f"Error sending profile verification email to {payload.correo}: {e}")
 
     return usuario_res
