@@ -5,3 +5,4 @@ seed_accounts.sql
 accounts.json
 generate_seed.py
 test_data.json
+seed_test_data.py

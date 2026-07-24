@@ -470,6 +470,62 @@ def admin_update_estado(
     finally:
         conn.close()
 
+class PrioridadUpdate(BaseModel):
+    prioridad: str
+
+
+@app.put("/admin/solicitudes/{id_solicitud}/prioridad", response_model=SolicitudDetail)
+def admin_update_prioridad(
+    id_solicitud: int,
+    payload: PrioridadUpdate,
+    current_user: TokenData = Depends(get_current_admin),
+):
+    if payload.prioridad not in PRIORIDADES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Prioridad inválida")
+    conn = obtener_conexion()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE solicitudes SET prioridad = %s WHERE id_solicitud = %s RETURNING "
+                    "id_solicitud, id_usuario, tipo_solicitud, titulo, descripcion, fecha_creacion, estado, prioridad, fecha_resolucion",
+                    (payload.prioridad, id_solicitud),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Solicitud no encontrada")
+                return SolicitudDetail(**dict(zip([desc[0] for desc in cur.description], row)))
+    finally:
+        conn.close()
+
+
+class CategoriaUpdate(BaseModel):
+    tipo_solicitud: str
+
+
+@app.put("/admin/solicitudes/{id_solicitud}/categoria", response_model=SolicitudDetail)
+def admin_update_categoria(
+    id_solicitud: int,
+    payload: CategoriaUpdate,
+    current_user: TokenData = Depends(get_current_admin),
+):
+    if payload.tipo_solicitud not in TIPOS_SOLICITUD:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de solicitud inválido")
+    conn = obtener_conexion()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE solicitudes SET tipo_solicitud = %s WHERE id_solicitud = %s RETURNING "
+                    "id_solicitud, id_usuario, tipo_solicitud, titulo, descripcion, fecha_creacion, estado, prioridad, fecha_resolucion",
+                    (payload.tipo_solicitud, id_solicitud),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Solicitud no encontrada")
+                return SolicitudDetail(**dict(zip([desc[0] for desc in cur.description], row)))
+    finally:
+        conn.close()
 
 @app.get("/admin/solicitudes/{id_solicitud}/anexos", response_model=List[AnexoSummary])
 def admin_list_anexos(id_solicitud: int, current_user: TokenData = Depends(get_current_admin)):
